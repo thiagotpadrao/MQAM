@@ -121,3 +121,73 @@ tab = pd.DataFrame(linhas)
 print("\nZeros em mileage (log10 indefinido):", int((df.mileage <= 0).sum()))
 print(tab.round(4).to_string(index=False))
 tab.to_csv(OUT + 'treadwear_transf_resumo.csv', index=False)
+
+# ======================= SEÇÃO 1.3 – ANÁLISE COM A COMBINAÇÃO ESCOLHIDA =======================
+# Combinação escolhida: log10 aplicado somente em Y  ->  log10(groove) ~ mileage
+# (acrescentar ao final do script; usa `df`, `np`, `pd`, `plt`, `sm`, `smf`, `stats`, `durbin_watson`, `OUT`)
+from statsmodels.stats.diagnostic import het_breuschpagan
+
+XL  = 'Quilometragem (milhares de milhas)'
+YLT = 'log10 da profundidade do sulco (log10 mils)'
+C1, C2 = '#2b6cb0', '#c53030'
+
+d3 = df.copy()
+d3['log_groove'] = np.log10(d3.groove)
+
+# 1. Dispersão (variáveis transformadas)
+fig, ax = plt.subplots(figsize=(6.2, 4))
+ax.scatter(d3.mileage, d3.log_groove, s=55, color=C1, edgecolors='white', zorder=3)
+ax.set_xlabel(XL); ax.set_ylabel(YLT); ax.set_title('Dispersão: log10(groove) vs. mileage')
+plt.tight_layout(); plt.savefig(OUT + 'treadwear_log_fig1_dispersao.png', dpi=200); plt.close()
+
+# 2. Ajuste
+m3 = smf.ols('log_groove ~ mileage', data=d3).fit()
+print(m3.summary())
+print("R2 =", m3.rsquared, " R2adj =", m3.rsquared_adj, " RSE =", np.sqrt(m3.mse_resid))
+print("Interpretação: cada 1000 milhas multiplica groove por 10^b1 =", 10**m3.params['mileage'],
+      "(redução média de %.2f%%)" % ((1 - 10**m3.params['mileage']) * 100))
+print("IC95%% do fator multiplicativo: [%.4f, %.4f]" % tuple(sorted(10**m3.conf_int().loc['mileage'].values)))
+
+# Reta + IC + IP (escala transformada)
+xr = pd.DataFrame({'mileage': np.linspace(d3.mileage.min(), d3.mileage.max(), 100)})
+sf3 = m3.get_prediction(xr).summary_frame(alpha=0.05)
+fig, ax = plt.subplots(figsize=(6.2, 4))
+ax.fill_between(xr.mileage, sf3.obs_ci_lower, sf3.obs_ci_upper, color='gray', alpha=0.18, label='Intervalo de predição 95%')
+ax.fill_between(xr.mileage, sf3.mean_ci_lower, sf3.mean_ci_upper, color=C2, alpha=0.28, label='Intervalo de confiança 95%')
+ax.plot(xr.mileage, sf3['mean'], color=C2, lw=2, label='Reta ajustada')
+ax.scatter(d3.mileage, d3.log_groove, s=55, color=C1, edgecolors='white', zorder=3, label='Observações')
+ax.set_xlabel(XL); ax.set_ylabel(YLT); ax.legend(fontsize=9, loc='upper right')
+ax.set_title(f'Reta de regressão com IC e IP (R² = {m3.rsquared:.3f})')
+plt.tight_layout(); plt.savefig(OUT + 'treadwear_log_fig2_reta_ic_ip.png', dpi=200); plt.close()
+
+# Resíduos: resíduos vs. preditos + QQ-plot (sem histograma: n = 9)
+res3, fit3 = m3.resid, m3.fittedvalues
+fig, axs = plt.subplots(1, 2, figsize=(9, 3.8))
+axs[0].scatter(fit3, res3, s=55, color=C1, edgecolors='white', zorder=3); axs[0].axhline(0, color=C2, ls='--')
+axs[0].set_xlabel('Valores preditos (log10 mils)'); axs[0].set_ylabel('Resíduos (log10 mils)')
+axs[0].set_title('Resíduos vs. valores preditos')
+sm.qqplot(res3, line='s', ax=axs[1], markerfacecolor=C1, markeredgecolor='white', markersize=8)
+axs[1].get_lines()[1].set_color(C2)
+axs[1].set_xlabel('Quantis teóricos (normal)'); axs[1].set_ylabel('Quantis amostrais'); axs[1].set_title('QQ-plot dos resíduos')
+plt.tight_layout(); plt.savefig(OUT + 'treadwear_log_fig3_residuos_qq.png', dpi=200); plt.close()
+
+# Extra (comparação com o modelo original): curva ajustada de volta à escala original (mils)
+fig, ax = plt.subplots(figsize=(6.2, 4))
+ax.fill_between(xr.mileage, 10**sf3.obs_ci_lower, 10**sf3.obs_ci_upper, color='gray', alpha=0.18, label='Intervalo de predição 95%')
+ax.plot(xr.mileage, 10**sf3['mean'], color=C2, lw=2, label='Modelo log10(groove)')
+ax.plot(xr.mileage, orig.params['Intercept'] + orig.params['mileage'] * xr.mileage, color='black', lw=1.5, ls='--', label='Modelo original (reta)')
+ax.scatter(df.mileage, df.groove, s=55, color=C1, edgecolors='white', zorder=3, label='Observações')
+ax.set_xlabel(XL); ax.set_ylabel('Profundidade do sulco (mils)'); ax.legend(fontsize=9)
+ax.set_title('Comparação na escala original')
+plt.tight_layout(); plt.savefig(OUT + 'treadwear_log_fig4_escala_original.png', dpi=200); plt.close()
+
+# Diagnósticos numéricos (apoio ao texto)
+print("\nResíduos:\n", pd.DataFrame({'mileage': d3.mileage, 'fit': fit3.round(4), 'resid': res3.round(4)}))
+print("Sinais dos resíduos:", np.sign(res3).astype(int).tolist())
+print("Shapiro-Wilk:", stats.shapiro(res3))
+print("Durbin-Watson:", durbin_watson(res3))
+print("Assimetria:", stats.skew(res3))
+print("corr(|resíduo|, predito):", np.corrcoef(np.abs(res3), fit3)[0, 1])
+pred_orig = 10**fit3
+print("RMSE na escala original (mils): modelo log =", np.sqrt(np.mean((df.groove - pred_orig)**2)),
+      "| modelo original =", np.sqrt(np.mean(orig.resid**2)))
